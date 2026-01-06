@@ -1,0 +1,6 @@
+# This file ensures the assets/images directory is preserved in git
+# Add your custom avatar images here:
+# - avatar_normal.png
+# - avatar_recording.png
+# - avatar_thinking.png
+# - avatar_speaking.png
