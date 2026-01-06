@@ -1,4 +1,4 @@
-# starka_assistant
+# LLM companion for older adults
 
 A personalized assistant for an older family member. To fully function requires an existing assistant from **smartiepal**. Read more here https://www.smartiepal.com/
 
