@@ -1,21 +1,124 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import '../providers/assistant_provider.dart';
+import '../providers/settings_provider.dart';
 
 class AssistantScreen extends StatelessWidget {
   const AssistantScreen({super.key});
   final double AVATAR_SIZE = 320.0;
-  final bool AVATARS_ON = true; // whether to use image avatars instead of icons
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      endDrawer: _buildSettingsDrawer(context),
       body: SafeArea(
-        child: Consumer<AssistantProvider>(
-          builder: (context, provider, child) {
-            return AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              child: _buildContent(context, provider),
+        child: Stack(
+          children: [
+            Consumer2<AssistantProvider, SettingsProvider>(
+              builder: (context, provider, settings, child) {
+                return AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: _buildContent(context, provider, settings),
+                );
+              },
+            ),
+            // Settings button in top-right corner
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Builder(
+                builder: (ctx) => IconButton(
+                  icon: const Icon(Icons.settings, size: 32, color: Colors.grey),
+                  onPressed: () {
+                    Scaffold.of(ctx).openEndDrawer();
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsDrawer(BuildContext context) {
+    return Drawer(
+      child: SafeArea(
+        child: Consumer2<SettingsProvider, AssistantProvider>(
+          builder: (context, settings, assistant, child) {
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text(
+                  'Nastavenia',
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 30),
+                SwitchListTile(
+                  title: const Text(
+                    'Zvukové informovanie',
+                    style: TextStyle(fontSize: 20),
+                  ),
+                  subtitle: const Text(
+                    'Hlasové oznámenia o stave aplikácie',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  value: settings.soundFeedbackEnabled,
+                  onChanged: (value) {
+                    settings.setSoundFeedback(value);
+                  },
+                ),
+                const Divider(),
+                SwitchListTile(
+                  title: const Text(
+                    'Avatary',
+                    style: TextStyle(fontSize: 20),
+                  ),
+                  subtitle: const Text(
+                    'Zobrazovať obrázky namiesto ikon',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  value: settings.avatarsEnabled,
+                  onChanged: (value) {
+                    settings.setAvatarsEnabled(value);
+                  },
+                ),
+                const Divider(),
+                const SizedBox(height: 10),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    assistant.speakTutorial();
+                  },
+                  icon: const Icon(Icons.help_outline, size: 28),
+                  label: const Text(
+                    'Návod',
+                    style: TextStyle(fontSize: 20),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                const Divider(),
+                const SizedBox(height: 10),
+                if ((dotenv.env['TERMS_URL'] ?? '').isNotEmpty)
+                  ListTile(
+                    leading: const Icon(Icons.description_outlined, size: 28),
+                    title: const Text(
+                      'Podmienky používania',
+                      style: TextStyle(fontSize: 18),
+                    ),
+                    subtitle: Text(
+                      dotenv.env['TERMS_URL']!,
+                      style: const TextStyle(fontSize: 14, color: Colors.blue),
+                    ),
+                  ),
+              ],
             );
           },
         ),
@@ -23,7 +126,7 @@ class AssistantScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildContent(BuildContext context, AssistantProvider provider) {
+  Widget _buildContent(BuildContext context, AssistantProvider provider, SettingsProvider settings) {
     // Show error if present
     if (provider.errorMessage != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -38,163 +141,115 @@ class AssistantScreen extends StatelessWidget {
       });
     }
 
+    final bool avatarsOn = settings.avatarsEnabled;
+
     switch (provider.currentState) {
       case AppState.idle:
       case AppState.idleWithHistory:
-        return _buildIdleScreen(context, provider);
+        return _buildIdleScreen(context, provider, avatarsOn);
       case AppState.recording:
-        return _buildRecordingScreen(context, provider);
+        return _buildRecordingScreen(context, provider, avatarsOn);
       case AppState.processing:
-        return _buildProcessingScreen(context, provider);
+        return _buildProcessingScreen(context, provider, avatarsOn);
       case AppState.playingResponse:
-        return _buildPlayingResponseScreen(context, provider);
+        return _buildProcessingScreen(context, provider, avatarsOn);
     }
   }
 
-  /// Idle screen - main avatar with "Hovoriť" button
-  Widget _buildIdleScreen(BuildContext context, AssistantProvider provider) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-              // Avatar
-              _buildAvatar(
-                imagePath: AVATARS_ON ? 'assets/images/avatar_normal.png': '',
-                icon: Icons.face,
-                size: AVATAR_SIZE,
-                color: Colors.blue,
-              ),
-          SizedBox(height: 60),
-          // Main "Hovoriť" button
-          _buildLargeButton(
-            text: 'Hovoriť',
-            onPressed: () => provider.startRecording(),
-            color: Colors.green,
-          ),
-
-          // "Nový rozhovor" button (only if has history)
-          if (provider.hasConversationHistory) ...[
+  /// Idle screen - tap anywhere to record, long press for new conversation + record
+  Widget _buildIdleScreen(BuildContext context, AssistantProvider provider, bool avatarsOn) {
+    return RawGestureDetector(
+      gestures: <Type, GestureRecognizerFactory>{
+        TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+          () => TapGestureRecognizer(),
+          (instance) { instance.onTap = () => provider.startRecording(); },
+        ),
+        LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+          () => LongPressGestureRecognizer(duration: const Duration(milliseconds: 1500)),
+          (instance) { instance.onLongPress = () => provider.startNewConversationAndRecord(); },
+        ),
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Center(
+        key: const ValueKey('idle'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildAvatar(
+              imagePath: avatarsOn ? 'assets/images/avatar_normal.png' : '',
+              icon: Icons.face,
+              size: AVATAR_SIZE,
+              color: Colors.blue,
+            ),
             const SizedBox(height: 20),
-            _buildLargeButton(
-              text: 'Nový rozhovor',
-              onPressed: () => provider.startNewConversation(),
-              color: Colors.orange,
+            if (provider.hasConversationHistory)
+              Text(
+                'Podržte pre nový rozhovor',
+                style: TextStyle(fontSize: 16, color: Colors.grey.shade500),
               ),
-            ],
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  /// Recording screen - microphone icon with "Poslať" and "Zrušiť" buttons
-  Widget _buildRecordingScreen(
-    BuildContext context,
-    AssistantProvider provider,
-  ) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Recording indicator (microphone icon)
-          _buildAvatar(
-            imagePath: "", // no avatar for now
-            icon: Icons.mic,
-            size: AVATAR_SIZE,
-            color: Colors.red,
-            isPulsing: true,
-          ),
-          const SizedBox(height: 60),
-
-          // Buttons row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildLargeButton(
-                text: 'Poslať',
-                onPressed: () => provider.submitAudio(),
-                color: Colors.blue,
-                width: 180,
-              ),
-              const SizedBox(width: 20),
-              _buildLargeButton(
-                text: 'Zrušiť',
-                onPressed: () => provider.cancelRecording(),
-                color: Colors.grey,
-                width: 180,
-              ),
-            ],
-          ),
-        ],
+  /// Recording screen - tap anywhere to submit
+  Widget _buildRecordingScreen(BuildContext context, AssistantProvider provider, bool avatarsOn) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => provider.submitAudio(),
+      child: Center(
+        key: const ValueKey('recording'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildAvatar(
+              imagePath: avatarsOn ? '' : '',
+              icon: Icons.mic,
+              size: AVATAR_SIZE,
+              color: Colors.red,
+              isPulsing: true,
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Nahrávam... Ťuknite pre odoslanie',
+              style: TextStyle(fontSize: 18, color: Colors.red),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  /// Processing screen - thinking avatar, no buttons
-  Widget _buildProcessingScreen(
-    BuildContext context,
-    AssistantProvider provider,
-  ) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Thinking avatar
-          _buildAvatar(
-            imagePath: AVATARS_ON ? 'assets/images/avatar_thinking.png': '',
-            icon: Icons.psychology,
-            size: AVATAR_SIZE,
-            color: Colors.purple,
-            isPulsing: true,
-          ),
-          const SizedBox(height: 40),
-          const Text(
-            'Premýšľam...',
-            style: TextStyle(fontSize: 24, color: Colors.grey),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Playing response screen - speaking avatar with "Znova" and "Ok" buttons
-  Widget _buildPlayingResponseScreen(
-    BuildContext context,
-    AssistantProvider provider,
-  ) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // Speaking avatar
-          _buildAvatar(
-            imagePath: AVATARS_ON ? 'assets/images/avatar_speaking.png': '',
-            icon: Icons.record_voice_over,
-            size: AVATAR_SIZE,
-            color: Colors.green,
-            isPulsing: true,
-          ),
-          const SizedBox(height: 60),
-
-          // Buttons row
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildLargeButton(
-                text: 'Znova',
-                onPressed: () => provider.replayResponse(),
-                color: Colors.orange,
-                width: 180,
-              ),
-              const SizedBox(width: 20),
-              _buildLargeButton(
-                text: 'Ok',
-                onPressed: () => provider.acknowledgeResponse(),
-                color: Colors.green,
-                width: 180,
-              ),
-            ],
-          ),
-        ],
+  /// Processing screen - long press to cancel everything
+  Widget _buildProcessingScreen(BuildContext context, AssistantProvider provider, bool avatarsOn) {
+    return RawGestureDetector(
+      gestures: <Type, GestureRecognizerFactory>{
+        LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+          () => LongPressGestureRecognizer(duration: const Duration(milliseconds: 1500)),
+          (instance) { instance.onLongPress = () => provider.cancelEverything(); },
+        ),
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Center(
+        key: const ValueKey('processing'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _buildAvatar(
+              imagePath: avatarsOn ? 'assets/images/avatar_thinking.png' : '',
+              icon: Icons.psychology,
+              size: AVATAR_SIZE,
+              color: Colors.purple,
+              isPulsing: true,
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Premýšľam...',
+              style: TextStyle(fontSize: 20, color: Colors.grey),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -207,10 +262,7 @@ class AssistantScreen extends StatelessWidget {
     required double size,
     bool isPulsing = false,
   }) {
-    Widget avatar = 
-              // Stack(
-            // children: [
-              Container(
+    Widget avatar = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
@@ -225,69 +277,16 @@ class AssistantScreen extends StatelessWidget {
           fit: BoxFit.cover,
           alignment: Alignment.topCenter,
           errorBuilder: (context, error, stackTrace) {
-            // Fallback to icon if image not found
             return Icon(icon, size: size * 0.6, color: color);
           },
         ),
       ),
     );
-    //  const SizedBox(height: 60),
-
-              // Positioned(
-              //   left: 0,
-              //   right: 0,
-              //   bottom: 0,
-              //   height: 200, // Height of the gradient area (adjust as needed)
-              //   child: Container(
-              //     decoration: BoxDecoration(
-              //       gradient: LinearGradient(
-              //         begin: Alignment.topCenter,
-              //         end: Alignment.bottomCenter,
-              //     colors: [
-              //       Colors.white.withOpacity(0.0),
-              //       Colors.white.withOpacity(0.6),
-              //       Colors.white.withOpacity(1.0),
-              //       Colors.white.withOpacity(1.0),
-              //     ],
-              //     stops: [0.0, 0.3, 0.6, 1.0],
-              //       ),
-              //     ),
-              //   ),
-              // ),],);
 
     if (isPulsing) {
       return _PulsingWidget(child: avatar);
     }
     return avatar;
-  }
-
-  /// Build large button
-  Widget _buildLargeButton({
-    required String text,
-    required VoidCallback onPressed,
-    required Color color,
-    double height = 120,
-    double width = 300,
-  }) {
-    return SizedBox(
-      height: height,
-      width: width,
-      child: ElevatedButton(
-        onPressed: onPressed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: color,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          elevation: 8,
-        ),
-        child: Text(
-          text,
-          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-        ),
-      ),
-    );
   }
 }
 

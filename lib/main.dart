@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'providers/assistant_provider.dart';
+import 'providers/settings_provider.dart';
 import 'screens/assistant_screen.dart';
+import 'screens/terms_screen.dart';
+import 'services/log_service.dart';
 
 Future<void> main() async {
   await dotenv.load(fileName: ".env");
+  await LogService().init();
   runApp(MyApp());
 }
 
@@ -14,8 +18,17 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => AssistantProvider(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => SettingsProvider()),
+        ChangeNotifierProxyProvider<SettingsProvider, AssistantProvider>(
+          create: (_) => AssistantProvider(),
+          update: (_, settings, assistant) {
+            assistant!.setSettingsProvider(settings);
+            return assistant;
+          },
+        ),
+      ],
       child: MaterialApp(
         title: 'Asistent pre Starku',
         debugShowCheckedModeBanner: false,
@@ -24,7 +37,19 @@ class MyApp extends StatelessWidget {
           useMaterial3: true,
           fontFamily: 'Roboto',
         ),
-        home: const AssistantScreen(),
+        home: Consumer<SettingsProvider>(
+          builder: (context, settings, _) {
+            if (!settings.loaded) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+            if (!settings.termsAccepted) {
+              return const TermsScreen();
+            }
+            return const AssistantScreen();
+          },
+        ),
       ),
     );
   }

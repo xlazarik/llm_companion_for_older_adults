@@ -54,6 +54,12 @@ dependencies:
 
   flutter_dotenv: ^5.1.0
 
+  # Text-to-speech for voice feedback
+  flutter_tts: ^4.2.0
+
+  # Shared preferences for settings persistence
+  shared_preferences: ^2.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
