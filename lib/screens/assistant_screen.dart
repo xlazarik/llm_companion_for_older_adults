@@ -1,13 +1,83 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
+
 import '../providers/assistant_provider.dart';
 import '../providers/settings_provider.dart';
+import 'camera_capture_screen.dart';
 
-class AssistantScreen extends StatelessWidget {
+class AssistantScreen extends StatefulWidget {
   const AssistantScreen({super.key});
-  final double AVATAR_SIZE = 320.0;
+
+  @override
+  State<AssistantScreen> createState() => _AssistantScreenState();
+}
+
+class _AssistantScreenState extends State<AssistantScreen> {
+  static const double _avatarSize = 320.0;
+  static const Duration _tripleTapWindow = Duration(milliseconds: 450);
+
+  Timer? _idleTapTimer;
+  int _idleTapCount = 0;
+
+  void _resetIdleTapTracking() {
+    _idleTapTimer?.cancel();
+    _idleTapTimer = null;
+    _idleTapCount = 0;
+  }
+
+  Future<void> _openInAppCamera(
+    BuildContext context,
+    AssistantProvider provider,
+    SettingsProvider settings,
+  ) async {
+    final imagePath = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => CameraCaptureScreen(
+          soundFeedbackEnabled: settings.soundFeedbackEnabled,
+        ),
+      ),
+    );
+
+    if (!mounted || imagePath == null) {
+      return;
+    }
+
+    await provider.submitPhoto(imagePath);
+  }
+
+  void _handleIdleTap(
+    BuildContext context,
+    AssistantProvider provider,
+    SettingsProvider settings,
+  ) {
+    _idleTapCount++;
+
+    if (_idleTapCount >= 3) {
+      _resetIdleTapTracking();
+      unawaited(_openInAppCamera(context, provider, settings));
+      return;
+    }
+
+    _idleTapTimer?.cancel();
+    _idleTapTimer = Timer(_tripleTapWindow, () {
+      final tapCount = _idleTapCount;
+      _resetIdleTapTracking();
+
+      if (tapCount > 0) {
+        provider.startRecording();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _resetIdleTapTracking();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +94,6 @@ class AssistantScreen extends StatelessWidget {
                 );
               },
             ),
-            // Settings button in top-right corner
             Positioned(
               top: 12,
               right: 12,
@@ -44,6 +113,10 @@ class AssistantScreen extends StatelessWidget {
   }
 
   Widget _buildSettingsDrawer(BuildContext context) {
+    final privacyUrl = (dotenv.env['PRIVACY_POLICY_URL'] ?? '').isNotEmpty
+        ? dotenv.env['PRIVACY_POLICY_URL']!
+        : (dotenv.env['TERMS_URL'] ?? '');
+
     return Drawer(
       child: SafeArea(
         child: Consumer2<SettingsProvider, AssistantProvider>(
@@ -106,15 +179,15 @@ class AssistantScreen extends StatelessWidget {
                 ),
                 const Divider(),
                 const SizedBox(height: 10),
-                if ((dotenv.env['TERMS_URL'] ?? '').isNotEmpty)
+                if (privacyUrl.isNotEmpty)
                   ListTile(
                     leading: const Icon(Icons.description_outlined, size: 28),
                     title: const Text(
-                      'Podmienky používania',
+                      'Ochrana súkromia',
                       style: TextStyle(fontSize: 18),
                     ),
                     subtitle: Text(
-                      dotenv.env['TERMS_URL']!,
+                      privacyUrl,
                       style: const TextStyle(fontSize: 14, color: Colors.blue),
                     ),
                   ),
@@ -126,8 +199,11 @@ class AssistantScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildContent(BuildContext context, AssistantProvider provider, SettingsProvider settings) {
-    // Show error if present
+  Widget _buildContent(
+    BuildContext context,
+    AssistantProvider provider,
+    SettingsProvider settings,
+  ) {
     if (provider.errorMessage != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -141,33 +217,31 @@ class AssistantScreen extends StatelessWidget {
       });
     }
 
-    final bool avatarsOn = settings.avatarsEnabled;
+    final avatarsOn = settings.avatarsEnabled;
 
     switch (provider.currentState) {
       case AppState.idle:
       case AppState.idleWithHistory:
-        return _buildIdleScreen(context, provider, avatarsOn);
+        return _buildIdleScreen(context, provider, settings, avatarsOn);
       case AppState.recording:
         return _buildRecordingScreen(context, provider, avatarsOn);
       case AppState.processing:
-        return _buildProcessingScreen(context, provider, avatarsOn);
       case AppState.playingResponse:
         return _buildProcessingScreen(context, provider, avatarsOn);
     }
   }
 
-  /// Idle screen - tap anywhere to record, long press for new conversation + record
-  Widget _buildIdleScreen(BuildContext context, AssistantProvider provider, bool avatarsOn) {
-    return RawGestureDetector(
-      gestures: <Type, GestureRecognizerFactory>{
-        TapGestureRecognizer: GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-          () => TapGestureRecognizer(),
-          (instance) { instance.onTap = () => provider.startRecording(); },
-        ),
-        LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-          () => LongPressGestureRecognizer(duration: const Duration(milliseconds: 1500)),
-          (instance) { instance.onLongPress = () => provider.startNewConversationAndRecord(); },
-        ),
+  Widget _buildIdleScreen(
+    BuildContext context,
+    AssistantProvider provider,
+    SettingsProvider settings,
+    bool avatarsOn,
+  ) {
+    return GestureDetector(
+      onTap: () => _handleIdleTap(context, provider, settings),
+      onLongPress: () {
+        _resetIdleTapTracking();
+        provider.startNewConversationAndRecord();
       },
       behavior: HitTestBehavior.opaque,
       child: Center(
@@ -178,10 +252,15 @@ class AssistantScreen extends StatelessWidget {
             _buildAvatar(
               imagePath: avatarsOn ? 'assets/images/avatar_normal.png' : '',
               icon: Icons.face,
-              size: AVATAR_SIZE,
+              size: _avatarSize,
               color: Colors.blue,
             ),
             const SizedBox(height: 20),
+            Text(
+              'Trojklik pre fotoaparát',
+              style: TextStyle(fontSize: 16, color: Colors.grey.shade500),
+            ),
+            const SizedBox(height: 8),
             if (provider.hasConversationHistory)
               Text(
                 'Podržte pre nový rozhovor',
@@ -193,7 +272,6 @@ class AssistantScreen extends StatelessWidget {
     );
   }
 
-  /// Recording screen - tap anywhere to submit
   Widget _buildRecordingScreen(BuildContext context, AssistantProvider provider, bool avatarsOn) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -206,7 +284,7 @@ class AssistantScreen extends StatelessWidget {
             _buildAvatar(
               imagePath: avatarsOn ? '' : '',
               icon: Icons.mic,
-              size: AVATAR_SIZE,
+              size: _avatarSize,
               color: Colors.red,
               isPulsing: true,
             ),
@@ -221,13 +299,14 @@ class AssistantScreen extends StatelessWidget {
     );
   }
 
-  /// Processing screen - long press to cancel everything
   Widget _buildProcessingScreen(BuildContext context, AssistantProvider provider, bool avatarsOn) {
     return RawGestureDetector(
       gestures: <Type, GestureRecognizerFactory>{
         LongPressGestureRecognizer: GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
           () => LongPressGestureRecognizer(duration: const Duration(milliseconds: 1500)),
-          (instance) { instance.onLongPress = () => provider.cancelEverything(); },
+          (instance) {
+            instance.onLongPress = () => provider.cancelEverything();
+          },
         ),
       },
       behavior: HitTestBehavior.opaque,
@@ -239,7 +318,7 @@ class AssistantScreen extends StatelessWidget {
             _buildAvatar(
               imagePath: avatarsOn ? 'assets/images/avatar_thinking.png' : '',
               icon: Icons.psychology,
-              size: AVATAR_SIZE,
+              size: _avatarSize,
               color: Colors.purple,
               isPulsing: true,
             ),
@@ -254,7 +333,6 @@ class AssistantScreen extends StatelessWidget {
     );
   }
 
-  /// Build avatar widget
   Widget _buildAvatar({
     required String imagePath,
     required IconData icon,
@@ -290,7 +368,6 @@ class AssistantScreen extends StatelessWidget {
   }
 }
 
-/// Pulsing animation widget
 class _PulsingWidget extends StatefulWidget {
   final Widget child;
 

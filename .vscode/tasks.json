@@ -1,0 +1,27 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build Android App Bundle",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"build",
+				"appbundle"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "Build Android App Bundle",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"build",
+				"appbundle"
+			],
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}

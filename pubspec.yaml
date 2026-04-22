@@ -1,4 +1,4 @@
-name: starka_assistant
+name: kevin
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -56,6 +56,13 @@ dependencies:
 
   # Text-to-speech for voice feedback
   flutter_tts: ^4.2.0
+
+  # Battery level monitoring
+  battery_plus: ^6.2.2
+
+  # In-app camera capture
+  camera: ^0.11.1
+  flutter_image_compress: ^2.4.0
 
   # Shared preferences for settings persistence
   shared_preferences: ^2.2.2

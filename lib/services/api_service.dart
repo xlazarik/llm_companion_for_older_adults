@@ -1,10 +1,13 @@
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
+
 import '../models/api_models.dart';
 
 class ApiService {
   static const String _baseUrl = 'https://ui.smartiepal.com';
+  static const Duration _requestTimeout = Duration(seconds: 300);
   static String get _assistantId => dotenv.env['ASSISTANT_ID'] ?? '';
 
   /// Send audio question to the API
@@ -22,15 +25,22 @@ class ApiService {
         identifier: identifier,
       );
 
-      final response = await http.post(
-        Uri.parse('$_baseUrl/ask/audio'),
-        headers: {
+      final client = http.Client();
+      http.Response response;
+      try {
+        final httpRequest = http.Request('POST', Uri.parse('$_baseUrl/ask/audio'));
+        httpRequest.headers.addAll({
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'X-assistant-id': _assistantId,
-        },
-        body: jsonEncode(request.toJson()),
-      );
+        });
+        httpRequest.body = jsonEncode(request.toJson());
+
+        final streamedResponse = await client.send(httpRequest).timeout(_requestTimeout);
+        response = await http.Response.fromStream(streamedResponse);
+      } finally {
+        client.close();
+      }
 
       if (response.statusCode == 200) {
         final jsonResponse = jsonDecode(response.body) as Map<String, dynamic>;
@@ -46,4 +56,43 @@ class ApiService {
       throw Exception('Failed to send audio: $e');
     }
   }
+
+  /// Upload a file so it becomes input for an existing session.
+  Future<SessionFileResponse> uploadSessionFile({
+    required String session,
+    required String filePath,
+  }) async {
+    try {
+      final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl/ask/file'));
+      request.headers.addAll({
+        'Accept': 'application/json',
+        'X-assistant-id': _assistantId,
+      });
+      request.fields['session'] = session;
+      request.files.add(await http.MultipartFile.fromPath('file', filePath));
+
+      final client = http.Client();
+      http.Response response;
+      try {
+        final streamedResponse = await client.send(request).timeout(_requestTimeout);
+        response = await http.Response.fromStream(streamedResponse);
+      } finally {
+        client.close();
+      }
+
+      if (response.statusCode == 200) {
+        final jsonResponse = jsonDecode(response.body) as Map<String, dynamic>;
+        return SessionFileResponse.fromJson(jsonResponse);
+      } else if (response.statusCode == 403) {
+        throw Exception('Forbidden: Check your assistant ID');
+      } else {
+        throw Exception(
+          'Session file upload failed with status ${response.statusCode}: ${response.body}',
+        );
+      }
+    } catch (e) {
+      throw Exception('Failed to upload session file: $e');
+    }
+  }
+
 }

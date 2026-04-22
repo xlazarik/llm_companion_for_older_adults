@@ -1,13 +1,16 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
-import '../services/audio_recorder_service.dart';
+
+import '../models/api_models.dart';
 import '../services/api_service.dart';
 import '../services/audio_player_service.dart';
-import '../services/tts_service.dart';
+import '../services/audio_recorder_service.dart';
+import '../services/battery_monitor_service.dart';
 import '../services/log_service.dart';
-import '../models/api_models.dart';
+import '../services/tts_service.dart';
 import 'settings_provider.dart';
 
 /// App states
@@ -20,80 +23,195 @@ enum AppState {
 }
 
 class AssistantProvider extends ChangeNotifier {
-  // Services
   final AudioRecorderService _recorderService = AudioRecorderService();
   final ApiService _apiService = ApiService();
   final AudioPlayerService _playerService = AudioPlayerService();
+  final BatteryMonitorService _batteryMonitorService = BatteryMonitorService();
   final TtsService _ttsService = TtsService();
   final LogService _log = LogService();
 
-  // Settings reference
   SettingsProvider? _settingsProvider;
+  StreamSubscription<int>? _batteryAlertSubscription;
+  StreamSubscription<PlayerState>? _playerStateSubscription;
   Timer? _thinkingTimer;
   bool _cancelled = false;
+  bool _isBatteryAnnouncementInProgress = false;
+  int? _pendingBatteryAnnouncementLevel;
 
-  // State
   AppState _currentState = AppState.idle;
   String? _sessionId;
   int _messageCounter = 0;
-  String? _lastRecordingPath;
-  String? _lastResponseAudio;
+  int? _lastResponseCounter;
+  DateTime? _lastResponseInserted;
   String? _errorMessage;
 
-  // Getters
   AppState get currentState => _currentState;
   bool get hasConversationHistory => _sessionId != null && _messageCounter > 0;
   String? get errorMessage => _errorMessage;
 
   bool get _soundFeedback => _settingsProvider?.soundFeedbackEnabled ?? false;
+  bool get _canAnnounceBattery =>
+      _currentState == AppState.idle || _currentState == AppState.idleWithHistory;
 
-  /// Set the settings provider reference
-  void setSettingsProvider(SettingsProvider provider) {
-    _settingsProvider = provider;
+  AssistantProvider() {
+    _batteryAlertSubscription = _batteryMonitorService.lowBatteryAlerts.listen((level) {
+      unawaited(_handleBatteryAnnouncement(level));
+    });
+    _playerStateSubscription = _playerService.onPlayerStateChanged.listen((state) {
+      if ((state == PlayerState.completed || state == PlayerState.stopped) &&
+          _currentState == AppState.playingResponse) {
+        _setCurrentState(AppState.idleWithHistory);
+      }
+    });
+    unawaited(_batteryMonitorService.start());
   }
 
-  /// Speak text if sound feedback is enabled
+  void setSettingsProvider(SettingsProvider provider) {
+    _settingsProvider = provider;
+    if (_soundFeedback) {
+      unawaited(_flushPendingBatteryAnnouncement());
+    }
+  }
+
+  void _setCurrentState(AppState state) {
+    _currentState = state;
+    notifyListeners();
+
+    if (_canAnnounceBattery) {
+      unawaited(
+        Future<void>.delayed(const Duration(seconds: 1), () async {
+          await _flushPendingBatteryAnnouncement();
+        }),
+      );
+    }
+  }
+
+  Future<void> _handleBatteryAnnouncement(int level) async {
+    if (!_soundFeedback) {
+      return;
+    }
+
+    if (!_canAnnounceBattery || _isBatteryAnnouncementInProgress) {
+      _pendingBatteryAnnouncementLevel = level;
+      return;
+    }
+
+    _isBatteryAnnouncementInProgress = true;
+    try {
+      await _ttsService.speakAndWait('Batéria má $level percent');
+    } catch (e) {
+      _log.error('battery_announcement_failed', detail: '$e');
+    } finally {
+      _isBatteryAnnouncementInProgress = false;
+    }
+
+    await _flushPendingBatteryAnnouncement();
+  }
+
+  Future<void> _flushPendingBatteryAnnouncement() async {
+    final level = _pendingBatteryAnnouncementLevel;
+    if (level == null ||
+        !_soundFeedback ||
+        !_canAnnounceBattery ||
+        _isBatteryAnnouncementInProgress) {
+      return;
+    }
+
+    _pendingBatteryAnnouncementLevel = null;
+    await _handleBatteryAnnouncement(level);
+  }
+
   Future<void> _speakIfEnabled(String text) async {
     if (_soundFeedback) {
       await _ttsService.speak(text);
     }
   }
 
-  /// Play beep if sound feedback is enabled
-  Future<void> _playBeepIfEnabled() async {
+  Future<void> _speakAndWaitIfEnabled(String text) async {
     if (_soundFeedback) {
-      await _ttsService.playBeep();
+      await _ttsService.speakAndWait(text);
     }
   }
 
-  /// Start the "thinking" timer that says "Premýšľam" every 5 seconds
   void _startThinkingTimer() {
     _thinkingTimer?.cancel();
-    _thinkingTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    _thinkingTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       _speakIfEnabled('Premýšľam');
     });
   }
 
-  /// Stop the thinking timer
   void _stopThinkingTimer() {
     _thinkingTimer?.cancel();
     _thinkingTimer = null;
   }
 
-  /// Announce that app is ready (called when entering idle state)
   Future<void> announceReady() async {
     await _speakIfEnabled('Aplikácia je zapnutá, čakám na konverzáciu');
   }
 
-  /// Start recording audio
+  ChatItem? _findLatestAudioResponse(
+    AskResponse response, {
+    int? counterAfter,
+    DateTime? insertedAfter,
+  }) {
+    final chat = response.chat;
+    if (chat == null || chat.isEmpty) {
+      return null;
+    }
+
+    for (final item in chat.reversed) {
+      final audioResponse = item.audioResponse;
+      if (audioResponse == null || audioResponse.isEmpty) {
+        continue;
+      }
+
+      final matchesCounter =
+          counterAfter == null || (item.counter != null && item.counter! > counterAfter);
+      final matchesInserted = insertedAfter == null ||
+          (item.inserted != null && item.inserted!.isAfter(insertedAfter));
+
+      if (matchesCounter && matchesInserted) {
+        return item;
+      }
+    }
+
+    return null;
+  }
+
+  Future<void> _playResponse(ChatItem responseItem) async {
+    final responseAudio = responseItem.audioResponse;
+    if (responseAudio == null || responseAudio.isEmpty) {
+      throw Exception('Žiadna audio odpoveď');
+    }
+
+    if (_cancelled) {
+      return;
+    }
+
+    _stopThinkingTimer();
+    await _ttsService.stop();
+
+    if (_cancelled) {
+      return;
+    }
+
+    _lastResponseCounter = responseItem.counter ?? _lastResponseCounter;
+    _lastResponseInserted = responseItem.inserted ?? _lastResponseInserted;
+
+    _log.info('response_playback_started');
+    await _playerService.playAudioFromBase64(responseAudio);
+    _setCurrentState(AppState.playingResponse);
+  }
+
   Future<void> startRecording() async {
     try {
       _errorMessage = null;
       _log.info('recording_started');
-      await _playBeepIfEnabled();
+      if (_soundFeedback) {
+        await _ttsService.speakAndWait('Nahrávam');
+      }
       await _recorderService.startRecording();
-      _currentState = AppState.recording;
-      notifyListeners();
+      _setCurrentState(AppState.recording);
     } catch (e) {
       _log.error('recording_failed', detail: '$e');
       _errorMessage = 'Chyba pri nahrávaní: $e';
@@ -101,17 +219,12 @@ class AssistantProvider extends ChangeNotifier {
     }
   }
 
-  /// Cancel recording and return to previous state
   Future<void> cancelRecording() async {
     try {
       _log.info('recording_cancelled');
       await _speakIfEnabled('Zrušené');
       await _recorderService.cancelRecording();
-      _lastRecordingPath = null;
-      _currentState = hasConversationHistory
-          ? AppState.idleWithHistory
-          : AppState.idle;
-      notifyListeners();
+      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
     } catch (e) {
       _log.error('recording_cancel_failed', detail: '$e');
       _errorMessage = 'Chyba pri zrušení: $e';
@@ -119,102 +232,86 @@ class AssistantProvider extends ChangeNotifier {
     }
   }
 
-  /// Submit recorded audio to the API
   Future<void> submitAudio() async {
     try {
       _errorMessage = null;
       _cancelled = false;
       _log.info('audio_submitting');
       await _speakIfEnabled('Odosielam');
-      _currentState = AppState.processing;
-      notifyListeners();
-
-      // Start thinking announcements every 5 seconds
+      _setCurrentState(AppState.processing);
       _startThinkingTimer();
 
-      // Stop recording and get file path
       final recordingPath = await _recorderService.stopRecording();
       if (recordingPath == null) {
         throw Exception('Žiadne nahrávanie nenájdené');
       }
-      _lastRecordingPath = recordingPath;
 
-      // Convert to base64
       final audioBase64 = await _recorderService.audioFileToBase64(recordingPath);
 
-      // Initialize session if needed
-      if (_sessionId == null) {
-        _sessionId = const Uuid().v4();
-      }
+      _sessionId ??= const Uuid().v4();
 
-      // Send to API
       final response = await _apiService.askAudio(
         session: _sessionId!,
         messageId: _messageCounter,
         audioBase64: audioBase64,
       );
 
-      // Increment message counter
       _messageCounter++;
       _log.info('api_response_received');
 
-      // Get the latest response with audio
-      String? responseAudio;
-      if (response.chat != null && response.chat!.isNotEmpty) {
-        // Find the last item with audioResponse
-        for (var item in response.chat!.reversed) {
-          if (item.audioResponse != null && item.audioResponse!.isNotEmpty) {
-            responseAudio = item.audioResponse;
-            break;
-          }
-        }
-      }
-
-      if (responseAudio == null || responseAudio.isEmpty) {
+      final responseItem = _findLatestAudioResponse(
+            response,
+            counterAfter: _lastResponseCounter,
+            insertedAfter: _lastResponseInserted,
+          ) ??
+          _findLatestAudioResponse(response);
+      if (responseItem == null) {
         throw Exception('Žiadna audio odpoveď');
       }
 
-      _lastResponseAudio = responseAudio;
-
-      // Check if cancelled during API call
-      if (_cancelled) return;
-
-      // Stop thinking timer and TTS before playing response
-      _stopThinkingTimer();
-      await _ttsService.stop();
-
-      // Check again after stopping TTS
-      if (_cancelled) return;
-
-      // Play the response audio
-      _log.info('response_playback_started');
-      await _playerService.playAudioFromBase64(responseAudio);
-
-      _currentState = AppState.playingResponse;
-      notifyListeners();
-
-      // Auto-transition to idle when playback finishes
-      _playerService.onPlayerStateChanged.listen((state) {
-        if (state == PlayerState.completed || state == PlayerState.stopped) {
-          if (_currentState == AppState.playingResponse) {
-            _currentState = AppState.idleWithHistory;
-            notifyListeners();
-          }
-        }
-      });
+      await _playResponse(responseItem);
     } catch (e) {
       _stopThinkingTimer();
       await _ttsService.stop();
       _log.error('audio_submit_failed', detail: '$e');
       _errorMessage = 'Chyba pri odosielaní: $e';
-      _currentState = hasConversationHistory
-          ? AppState.idleWithHistory
-          : AppState.idle;
-      notifyListeners();
+      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
     }
   }
 
-  /// Replay the last audio response
+  Future<void> submitPhoto(String imagePath) async {
+    try {
+      _errorMessage = null;
+      _cancelled = false;
+      _log.info('photo_submit_started');
+
+      _sessionId ??= const Uuid().v4();
+      _setCurrentState(AppState.processing);
+      _startThinkingTimer();
+
+      await _apiService.uploadSessionFile(
+        session: _sessionId!,
+        filePath: imagePath,
+      );
+      _log.info('photo_uploaded');
+
+      _stopThinkingTimer();
+      await _speakAndWaitIfEnabled('Obrázok nahratý');
+
+      if (_cancelled) {
+        return;
+      }
+
+      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+    } catch (e) {
+      _stopThinkingTimer();
+      await _ttsService.stop();
+      _log.error('photo_submit_failed', detail: '$e');
+      _errorMessage = 'Chyba pri spracovaní fotografie: $e';
+      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+    }
+  }
+
   Future<void> replayResponse() async {
     try {
       _errorMessage = null;
@@ -226,29 +323,24 @@ class AssistantProvider extends ChangeNotifier {
     }
   }
 
-  /// Acknowledge response and return to idle with history
   Future<void> acknowledgeResponse() async {
     await _playerService.stop();
     await _speakIfEnabled('V poriadku');
-    _currentState = AppState.idleWithHistory;
-    notifyListeners();
+    _setCurrentState(AppState.idleWithHistory);
   }
 
-  /// Start a new conversation (clear context)
   Future<void> startNewConversation() async {
     _log.info('new_conversation');
     await _speakIfEnabled('Nový rozhovor');
     await _playerService.cleanupAudio();
     _sessionId = null;
     _messageCounter = 0;
-    _lastRecordingPath = null;
-    _lastResponseAudio = null;
+    _lastResponseCounter = null;
+    _lastResponseInserted = null;
     _errorMessage = null;
-    _currentState = AppState.idle;
-    notifyListeners();
+    _setCurrentState(AppState.idle);
   }
 
-  /// Cancel everything (processing/playback) and return to fresh idle
   Future<void> cancelEverything() async {
     _log.info('cancel_everything');
     _cancelled = true;
@@ -258,37 +350,33 @@ class AssistantProvider extends ChangeNotifier {
     await _playerService.cleanupAudio();
     _sessionId = null;
     _messageCounter = 0;
-    _lastRecordingPath = null;
-    _lastResponseAudio = null;
+    _lastResponseCounter = null;
+    _lastResponseInserted = null;
     _errorMessage = null;
-    _currentState = AppState.idle;
-    notifyListeners();
+    _setCurrentState(AppState.idle);
     await _speakIfEnabled('Zrušené');
   }
 
-  /// Start a new conversation and immediately begin recording
   Future<void> startNewConversationAndRecord() async {
     _log.info('new_conversation_and_record');
     await _playerService.stop();
     await _playerService.cleanupAudio();
     _sessionId = null;
     _messageCounter = 0;
-    _lastRecordingPath = null;
-    _lastResponseAudio = null;
+    _lastResponseCounter = null;
+    _lastResponseInserted = null;
     _errorMessage = null;
     await _speakIfEnabled('Nový rozhovor');
-    // Small delay so TTS finishes before recording starts
     await Future.delayed(const Duration(milliseconds: 800));
     await _recorderService.startRecording();
-    _currentState = AppState.recording;
-    notifyListeners();
+    _setCurrentState(AppState.recording);
   }
 
-  /// Speak the tutorial/instructions
   Future<void> speakTutorial() async {
     await _ttsService.speak(
       'Návod na ovládanie aplikácie. '
       'Ťuknite na obrázok a začne sa nahrávanie vašej otázky. '
+      'Ak na obrázok trikrát rýchlo ťuknete, otvorí sa fotoaparát priamo v aplikácii a odfotená fotografia sa pošle do konverzácie. '
       'Ťuknite znova a otázka sa odošle. '
       'Počkajte na odpoveď, ktorá sa automaticky prehrá. '
       'Po prehratí odpovede ťuknite na obrázok pre návrat. '
@@ -297,7 +385,6 @@ class AssistantProvider extends ChangeNotifier {
     );
   }
 
-  /// Clear error message
   void clearError() {
     _errorMessage = null;
     notifyListeners();
@@ -306,6 +393,9 @@ class AssistantProvider extends ChangeNotifier {
   @override
   void dispose() {
     _stopThinkingTimer();
+    unawaited(_batteryAlertSubscription?.cancel());
+    unawaited(_playerStateSubscription?.cancel());
+    unawaited(_batteryMonitorService.dispose());
     _ttsService.dispose();
     _recorderService.dispose();
     _playerService.dispose();

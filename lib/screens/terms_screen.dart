@@ -19,11 +19,15 @@ class _TermsScreenState extends State<TermsScreen> {
   bool _isSpeaking = false;
 
   String get _termsUrl => dotenv.env['TERMS_URL'] ?? '';
+  String get _privacyUrl => (dotenv.env['PRIVACY_POLICY_URL'] ?? '').isNotEmpty
+      ? dotenv.env['PRIVACY_POLICY_URL']!
+      : _termsUrl;
 
   String get _termsText =>
-      'Podmienky používania tejto aplikácie nájdete na adrese $_termsUrl. '
-      'Používaním tejto aplikácie súhlasíte so spracovaním vašich hlasových nahrávok. '
-      'Pre pokračovanie musíte súhlasiť s podmienkami používania. '
+      'Podmienky používania a zásady ochrany súkromia tejto aplikácie nájdete na adrese $_privacyUrl. '
+      'Používaním tejto aplikácie súhlasíte so spracovaním vašich hlasových nahrávok a fotografií vytvorených fotoaparátom aplikácie. '
+      'Fotografie sa používajú len ako vstup do konverzácie s asistentom. '
+      'Pre pokračovanie musíte súhlasiť s podmienkami používania a ochranou súkromia. '
       'Stlačte tlačidlo Súhlasím pre pokračovanie, alebo Nesúhlasím pre ukončenie aplikácie.';
 
   Future<void> _speakTerms() async {
@@ -75,7 +79,7 @@ class _TermsScreenState extends State<TermsScreen> {
               ),
               const SizedBox(height: 24),
               const Text(
-                'Podmienky používania',
+                'Podmienky a súkromie',
                 style: TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
@@ -89,20 +93,20 @@ class _TermsScreenState extends State<TermsScreen> {
                     children: [
                       const Text(
                         'Pre používanie tejto aplikácie je potrebné súhlasiť '
-                        's podmienkami používania.',
+                        's podmienkami používania a ochranou súkromia.',
                         style: TextStyle(fontSize: 20),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 20),
-                      if (_termsUrl.isNotEmpty) ...[
+                      if (_privacyUrl.isNotEmpty) ...[
                         const Text(
-                          'Podmienky používania nájdete na adrese:',
+                          'Zásady ochrany súkromia nájdete na adrese:',
                           style: TextStyle(fontSize: 18),
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          _termsUrl,
+                          _privacyUrl,
                           style: const TextStyle(
                             fontSize: 16,
                             color: Colors.blue,
@@ -111,6 +115,12 @@ class _TermsScreenState extends State<TermsScreen> {
                           textAlign: TextAlign.center,
                         ),
                       ],
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Aplikácia používa fotoaparát na vytvorenie fotografie, ktorú používateľ vedome odošle do kontextu konverzácie.',
+                        style: TextStyle(fontSize: 18),
+                        textAlign: TextAlign.center,
+                      ),
                     ],
                   ),
                 ),
@@ -124,7 +134,7 @@ class _TermsScreenState extends State<TermsScreen> {
                   size: 28,
                 ),
                 label: Text(
-                  _isSpeaking ? 'Zastaviť' : 'Prehrať podmienky',
+                  _isSpeaking ? 'Zastaviť' : 'Prehrať podmienky a súkromie',
                   style: const TextStyle(fontSize: 20),
                 ),
                 style: OutlinedButton.styleFrom(

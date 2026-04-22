@@ -118,6 +118,20 @@ class TtsService {
     await _tts.speak(text);
   }
 
+  /// Speak text and wait until TTS finishes
+  Future<void> speakAndWait(String text) async {
+    await _ensureInitialized();
+    final completer = Completer<void>();
+    _tts.setCompletionHandler(() {
+      if (!completer.isCompleted) completer.complete();
+    });
+    await _tts.speak(text);
+    await completer.future.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {},
+    );
+  }
+
   Future<void> stop() async {
     await _tts.stop();
   }

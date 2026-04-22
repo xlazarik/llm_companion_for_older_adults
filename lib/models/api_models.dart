@@ -46,6 +46,23 @@ class AskResponse {
   }
 }
 
+class SessionFileResponse {
+  final int? id;
+  final String? name;
+
+  SessionFileResponse({
+    this.id,
+    this.name,
+  });
+
+  factory SessionFileResponse.fromJson(Map<String, dynamic> json) {
+    return SessionFileResponse(
+      id: json['id'] as int?,
+      name: json['name'] as String?,
+    );
+  }
+}
+
 class ChatItem {
   final bool? answer;
   final String? text;
