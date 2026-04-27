@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/api_models.dart';
 
@@ -69,7 +71,14 @@ class ApiService {
         'X-assistant-id': _assistantId,
       });
       request.fields['session'] = session;
-      request.files.add(await http.MultipartFile.fromPath('file', filePath));
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'file',
+          filePath,
+          filename: p.basename(filePath),
+          contentType: _contentTypeFor(filePath),
+        ),
+      );
 
       final client = http.Client();
       http.Response response;
@@ -92,6 +101,25 @@ class ApiService {
       }
     } catch (e) {
       throw Exception('Failed to upload session file: $e');
+    }
+  }
+
+  static MediaType _contentTypeFor(String filePath) {
+    final ext = p.extension(filePath).toLowerCase();
+    switch (ext) {
+      case '.jpg':
+      case '.jpeg':
+        return MediaType('image', 'jpeg');
+      case '.png':
+        return MediaType('image', 'png');
+      case '.webp':
+        return MediaType('image', 'webp');
+      case '.heic':
+        return MediaType('image', 'heic');
+      case '.gif':
+        return MediaType('image', 'gif');
+      default:
+        return MediaType('application', 'octet-stream');
     }
   }
 

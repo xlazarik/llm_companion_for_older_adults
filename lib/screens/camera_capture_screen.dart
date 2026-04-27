@@ -94,6 +94,11 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       _isCapturing = true;
     });
 
+    // Stop the opening hint immediately so it doesn't keep talking after
+    // capture and so the global TTS engine is free for the assistant
+    // provider's announcements that follow this screen.
+    await _ttsService.stop();
+
     try {
       await HapticFeedback.heavyImpact();
       final photo = await controller.takePicture();
@@ -124,8 +129,11 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
 
   @override
   void dispose() {
-    unawaited(_ttsService.stop());
-    _ttsService.dispose();
+    // Intentionally do NOT call _ttsService.stop() / dispose() here: that
+    // would tear down the shared native TTS engine and silence the assistant
+    // provider's 'Fotku nahrávam' announcement that fires immediately after
+    // this screen pops. The opening hint is already stopped in _capturePhoto
+    // and _cancelCapture.
     unawaited(_controller?.dispose());
     super.dispose();
   }

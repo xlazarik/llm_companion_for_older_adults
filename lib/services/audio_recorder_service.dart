@@ -7,6 +7,22 @@ import 'package:permission_handler/permission_handler.dart';
 class AudioRecorderService {
   final AudioRecorder _recorder = AudioRecorder();
   String? _currentRecordingPath;
+  Directory? _cachedTempDir;
+  bool _permissionPrewarmed = false;
+
+  /// Pre-initialize expensive resources (permission state, temp dir) so the
+  /// first call to [startRecording] doesn't pay that cost.
+  Future<void> prewarm() async {
+    try {
+      _cachedTempDir ??= await getTemporaryDirectory();
+    } catch (_) {}
+    if (!_permissionPrewarmed) {
+      try {
+        await Permission.microphone.status;
+        _permissionPrewarmed = true;
+      } catch (_) {}
+    }
+  }
 
   /// Request microphone permission
   Future<bool> requestPermission() async {
@@ -30,7 +46,15 @@ class AudioRecorderService {
         }
       }
 
-      final directory = await getTemporaryDirectory();
+      // Defensive: make sure no previous session is still active.
+      try {
+        if (await _recorder.isRecording()) {
+          await _recorder.stop();
+        }
+      } catch (_) {}
+
+      final directory = _cachedTempDir ?? await getTemporaryDirectory();
+      _cachedTempDir = directory;
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       _currentRecordingPath = '${directory.path}/recording_$timestamp.m4a';
 
@@ -51,6 +75,7 @@ class AudioRecorderService {
   Future<String?> stopRecording() async {
     try {
       final path = await _recorder.stop();
+      _currentRecordingPath = null;
       return path;
     } catch (e) {
       throw Exception('Failed to stop recording: $e');

@@ -275,7 +275,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
   Widget _buildRecordingScreen(BuildContext context, AssistantProvider provider, bool avatarsOn) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => provider.submitAudio(),
+      onTap: provider.canSubmitRecording ? () => provider.submitAudio() : null,
       child: Center(
         key: const ValueKey('recording'),
         child: Column(
@@ -289,9 +289,11 @@ class _AssistantScreenState extends State<AssistantScreen> {
               isPulsing: true,
             ),
             const SizedBox(height: 20),
-            const Text(
-              'Nahrávam... Ťuknite pre odoslanie',
-              style: TextStyle(fontSize: 18, color: Colors.red),
+            Text(
+              provider.isPreparingRecording
+                  ? 'Moment, pripravujem mikrofón...'
+                  : 'Hovorte. Po dokončení ťuknite pre odoslanie',
+              style: const TextStyle(fontSize: 18, color: Colors.red),
             ),
           ],
         ),

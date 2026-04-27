@@ -44,10 +44,13 @@ class AssistantProvider extends ChangeNotifier {
   int? _lastResponseCounter;
   DateTime? _lastResponseInserted;
   String? _errorMessage;
+  bool _isRecordingReady = false;
 
   AppState get currentState => _currentState;
   bool get hasConversationHistory => _sessionId != null && _messageCounter > 0;
   String? get errorMessage => _errorMessage;
+  bool get isPreparingRecording => _currentState == AppState.recording && !_isRecordingReady;
+  bool get canSubmitRecording => _currentState == AppState.recording && _isRecordingReady;
 
   bool get _soundFeedback => _settingsProvider?.soundFeedbackEnabled ?? false;
   bool get _canAnnounceBattery =>
@@ -64,6 +67,7 @@ class AssistantProvider extends ChangeNotifier {
       }
     });
     unawaited(_batteryMonitorService.start());
+    unawaited(_recorderService.prewarm());
   }
 
   void setSettingsProvider(SettingsProvider provider) {
@@ -205,17 +209,28 @@ class AssistantProvider extends ChangeNotifier {
 
   Future<void> startRecording() async {
     try {
+      if (_currentState == AppState.recording ||
+          _currentState == AppState.processing ||
+          _currentState == AppState.playingResponse) {
+        return;
+      }
+
       _errorMessage = null;
+      _isRecordingReady = false;
+      _setCurrentState(AppState.recording);
       _log.info('recording_started');
+      await _speakAndWaitIfEnabled('Nahrávam');
       if (_soundFeedback) {
-        await _ttsService.speakAndWait('Nahrávam');
+        await _ttsService.playBeep();
       }
       await _recorderService.startRecording();
-      _setCurrentState(AppState.recording);
+      _isRecordingReady = true;
+      notifyListeners();
     } catch (e) {
+      _isRecordingReady = false;
       _log.error('recording_failed', detail: '$e');
       _errorMessage = 'Chyba pri nahrávaní: $e';
-      notifyListeners();
+      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
     }
   }
 
@@ -234,17 +249,23 @@ class AssistantProvider extends ChangeNotifier {
 
   Future<void> submitAudio() async {
     try {
+      if (!canSubmitRecording) {
+        return;
+      }
+
       _errorMessage = null;
       _cancelled = false;
-      _log.info('audio_submitting');
-      await _speakIfEnabled('Odosielam');
+      _isRecordingReady = false;
       _setCurrentState(AppState.processing);
-      _startThinkingTimer();
+      _log.info('audio_submitting');
 
       final recordingPath = await _recorderService.stopRecording();
       if (recordingPath == null) {
         throw Exception('Žiadne nahrávanie nenájdené');
       }
+
+      await _speakIfEnabled('Odosielam');
+      _startThinkingTimer();
 
       final audioBase64 = await _recorderService.audioFileToBase64(recordingPath);
 
@@ -287,6 +308,7 @@ class AssistantProvider extends ChangeNotifier {
 
       _sessionId ??= const Uuid().v4();
       _setCurrentState(AppState.processing);
+      await _speakAndWaitIfEnabled('Fotku nahrávam');
       _startThinkingTimer();
 
       await _apiService.uploadSessionFile(
@@ -296,13 +318,13 @@ class AssistantProvider extends ChangeNotifier {
       _log.info('photo_uploaded');
 
       _stopThinkingTimer();
-      await _speakAndWaitIfEnabled('Obrázok nahratý');
 
       if (_cancelled) {
         return;
       }
 
       _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+      await _speakAndWaitIfEnabled('Obrázok nahratý');
     } catch (e) {
       _stopThinkingTimer();
       await _ttsService.stop();
@@ -358,18 +380,37 @@ class AssistantProvider extends ChangeNotifier {
   }
 
   Future<void> startNewConversationAndRecord() async {
-    _log.info('new_conversation_and_record');
-    await _playerService.stop();
-    await _playerService.cleanupAudio();
-    _sessionId = null;
-    _messageCounter = 0;
-    _lastResponseCounter = null;
-    _lastResponseInserted = null;
-    _errorMessage = null;
-    await _speakIfEnabled('Nový rozhovor');
-    await Future.delayed(const Duration(milliseconds: 800));
-    await _recorderService.startRecording();
-    _setCurrentState(AppState.recording);
+    try {
+      if (_currentState == AppState.recording ||
+          _currentState == AppState.processing ||
+          _currentState == AppState.playingResponse) {
+        return;
+      }
+
+      _log.info('new_conversation_and_record');
+      await _playerService.stop();
+      await _playerService.cleanupAudio();
+      _sessionId = null;
+      _messageCounter = 0;
+      _lastResponseCounter = null;
+      _lastResponseInserted = null;
+      _errorMessage = null;
+      _isRecordingReady = false;
+      _setCurrentState(AppState.recording);
+      await _speakAndWaitIfEnabled('Nový rozhovor');
+      await _speakAndWaitIfEnabled('Nahrávam');
+      if (_soundFeedback) {
+        await _ttsService.playBeep();
+      }
+      await _recorderService.startRecording();
+      _isRecordingReady = true;
+      notifyListeners();
+    } catch (e) {
+      _isRecordingReady = false;
+      _log.error('new_conversation_and_record_failed', detail: '$e');
+      _errorMessage = 'Chyba pri nahrávaní: $e';
+      _setCurrentState(AppState.idle);
+    }
   }
 
   Future<void> speakTutorial() async {
