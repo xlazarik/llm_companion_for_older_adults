@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
@@ -264,20 +265,38 @@ class AssistantProvider extends ChangeNotifier {
         throw Exception('Žiadne nahrávanie nenájdené');
       }
 
+      // Reject obviously empty / silent recordings before paying for an
+      // upload + LLM round-trip. The detector errs on the side of "speech"
+      // when in doubt so we don't accidentally swallow real questions.
+      if (!_recorderService.speechDetected) {
+        _log.info('audio_no_speech_detected');
+        try {
+          final f = File(recordingPath);
+          if (await f.exists()) {
+            await f.delete();
+          }
+        } catch (_) {}
+        _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+        await _speakAndWaitIfEnabled(
+          'Nepodarilo sa rozpoznať reč, skúste znova',
+        );
+        return;
+      }
+
       await _speakIfEnabled('Odosielam');
       _startThinkingTimer();
 
       final audioBase64 = await _recorderService.audioFileToBase64(recordingPath);
 
       _sessionId ??= const Uuid().v4();
+      final messageId = _messageCounter++;
 
       final response = await _apiService.askAudio(
         session: _sessionId!,
-        messageId: _messageCounter,
+        messageId: messageId,
         audioBase64: audioBase64,
       );
 
-      _messageCounter++;
       _log.info('api_response_received');
 
       final responseItem = _findLatestAudioResponse(

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:record/record.dart';
@@ -9,6 +10,28 @@ class AudioRecorderService {
   String? _currentRecordingPath;
   Directory? _cachedTempDir;
   bool _permissionPrewarmed = false;
+
+  // --- Speech detection state -------------------------------------------------
+  // We sample the recorder amplitude (in dBFS) at a steady interval while a
+  // recording is active and count how many of those samples were loud enough
+  // to be considered speech. After [stopRecording] callers can use
+  // [speechDetected] to decide whether the clip is worth uploading.
+  StreamSubscription<Amplitude>? _amplitudeSubscription;
+  static const Duration _amplitudeInterval = Duration(milliseconds: 100);
+  // dBFS values are <= 0; -160 is silence, 0 is max. -38 dBFS is typically
+  // around the level of someone speaking close to the phone in a quiet room.
+  static const double _speechThresholdDb = -38.0;
+  // Require roughly 300 ms of cumulative "loud" audio before we consider the
+  // clip to actually contain speech. Below that we treat it as noise / silence.
+  static const int _minLoudSamples = 3;
+  int _loudSamples = 0;
+  double _maxAmplitudeDb = -160.0;
+
+  /// True when the last recording captured enough loud audio to plausibly be
+  /// speech. Always true if amplitude monitoring isn't available on the
+  /// platform (we'd rather upload than discard a real recording).
+  bool get speechDetected =>
+      _loudSamples >= _minLoudSamples || _maxAmplitudeDb > _speechThresholdDb + 6;
 
   /// Pre-initialize expensive resources (permission state, temp dir) so the
   /// first call to [startRecording] doesn't pay that cost.
@@ -66,14 +89,37 @@ class AudioRecorderService {
         ),
         path: _currentRecordingPath!,
       );
+
+      _resetSpeechDetection();
+      _amplitudeSubscription =
+          _recorder.onAmplitudeChanged(_amplitudeInterval).listen((amp) {
+        final db = amp.current;
+        if (db.isFinite) {
+          if (db > _maxAmplitudeDb) {
+            _maxAmplitudeDb = db;
+          }
+          if (db > _speechThresholdDb) {
+            _loudSamples++;
+          }
+        }
+      }, onError: (_) {});
     } catch (e) {
       throw Exception('Failed to start recording: $e');
     }
   }
 
+  void _resetSpeechDetection() {
+    _amplitudeSubscription?.cancel();
+    _amplitudeSubscription = null;
+    _loudSamples = 0;
+    _maxAmplitudeDb = -160.0;
+  }
+
   /// Stop recording and return the file path
   Future<String?> stopRecording() async {
     try {
+      await _amplitudeSubscription?.cancel();
+      _amplitudeSubscription = null;
       final path = await _recorder.stop();
       _currentRecordingPath = null;
       return path;
@@ -85,6 +131,8 @@ class AudioRecorderService {
   /// Cancel recording and delete the file
   Future<void> cancelRecording() async {
     try {
+      await _amplitudeSubscription?.cancel();
+      _amplitudeSubscription = null;
       await _recorder.stop();
       if (_currentRecordingPath != null) {
         final file = File(_currentRecordingPath!);
