@@ -15,13 +15,7 @@ import '../services/tts_service.dart';
 import 'settings_provider.dart';
 
 /// App states
-enum AppState {
-  idle,
-  idleWithHistory,
-  recording,
-  processing,
-  playingResponse,
-}
+enum AppState { idle, idleWithHistory, recording, processing, playingResponse }
 
 class AssistantProvider extends ChangeNotifier {
   final AudioRecorderService _recorderService = AudioRecorderService();
@@ -50,18 +44,25 @@ class AssistantProvider extends ChangeNotifier {
   AppState get currentState => _currentState;
   bool get hasConversationHistory => _sessionId != null && _messageCounter > 0;
   String? get errorMessage => _errorMessage;
-  bool get isPreparingRecording => _currentState == AppState.recording && !_isRecordingReady;
-  bool get canSubmitRecording => _currentState == AppState.recording && _isRecordingReady;
+  bool get isPreparingRecording =>
+      _currentState == AppState.recording && !_isRecordingReady;
+  bool get canSubmitRecording =>
+      _currentState == AppState.recording && _isRecordingReady;
 
   bool get _soundFeedback => _settingsProvider?.soundFeedbackEnabled ?? false;
   bool get _canAnnounceBattery =>
-      _currentState == AppState.idle || _currentState == AppState.idleWithHistory;
+      _currentState == AppState.idle ||
+      _currentState == AppState.idleWithHistory;
 
   AssistantProvider() {
-    _batteryAlertSubscription = _batteryMonitorService.lowBatteryAlerts.listen((level) {
+    _batteryAlertSubscription = _batteryMonitorService.lowBatteryAlerts.listen((
+      level,
+    ) {
       unawaited(_handleBatteryAnnouncement(level));
     });
-    _playerStateSubscription = _playerService.onPlayerStateChanged.listen((state) {
+    _playerStateSubscription = _playerService.onPlayerStateChanged.listen((
+      state,
+    ) {
       if ((state == PlayerState.completed || state == PlayerState.stopped) &&
           _currentState == AppState.playingResponse) {
         _setCurrentState(AppState.idleWithHistory);
@@ -69,6 +70,7 @@ class AssistantProvider extends ChangeNotifier {
     });
     unawaited(_batteryMonitorService.start());
     unawaited(_recorderService.prewarm());
+    unawaited(_ttsService.prewarm());
   }
 
   void setSettingsProvider(SettingsProvider provider) {
@@ -171,8 +173,10 @@ class AssistantProvider extends ChangeNotifier {
       }
 
       final matchesCounter =
-          counterAfter == null || (item.counter != null && item.counter! > counterAfter);
-      final matchesInserted = insertedAfter == null ||
+          counterAfter == null ||
+          (item.counter != null && item.counter! > counterAfter);
+      final matchesInserted =
+          insertedAfter == null ||
           (item.inserted != null && item.inserted!.isAfter(insertedAfter));
 
       if (matchesCounter && matchesInserted) {
@@ -231,7 +235,9 @@ class AssistantProvider extends ChangeNotifier {
       _isRecordingReady = false;
       _log.error('recording_failed', detail: '$e');
       _errorMessage = 'Chyba pri nahrávaní: $e';
-      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+      _setCurrentState(
+        hasConversationHistory ? AppState.idleWithHistory : AppState.idle,
+      );
     }
   }
 
@@ -240,7 +246,9 @@ class AssistantProvider extends ChangeNotifier {
       _log.info('recording_cancelled');
       await _speakIfEnabled('Zrušené');
       await _recorderService.cancelRecording();
-      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+      _setCurrentState(
+        hasConversationHistory ? AppState.idleWithHistory : AppState.idle,
+      );
     } catch (e) {
       _log.error('recording_cancel_failed', detail: '$e');
       _errorMessage = 'Chyba pri zrušení: $e';
@@ -276,7 +284,9 @@ class AssistantProvider extends ChangeNotifier {
             await f.delete();
           }
         } catch (_) {}
-        _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+        _setCurrentState(
+          hasConversationHistory ? AppState.idleWithHistory : AppState.idle,
+        );
         await _speakAndWaitIfEnabled(
           'Nepodarilo sa rozpoznať reč, skúste znova',
         );
@@ -286,7 +296,9 @@ class AssistantProvider extends ChangeNotifier {
       await _speakIfEnabled('Odosielam');
       _startThinkingTimer();
 
-      final audioBase64 = await _recorderService.audioFileToBase64(recordingPath);
+      final audioBase64 = await _recorderService.audioFileToBase64(
+        recordingPath,
+      );
 
       _sessionId ??= const Uuid().v4();
       final messageId = _messageCounter++;
@@ -299,7 +311,8 @@ class AssistantProvider extends ChangeNotifier {
 
       _log.info('api_response_received');
 
-      final responseItem = _findLatestAudioResponse(
+      final responseItem =
+          _findLatestAudioResponse(
             response,
             counterAfter: _lastResponseCounter,
             insertedAfter: _lastResponseInserted,
@@ -315,7 +328,9 @@ class AssistantProvider extends ChangeNotifier {
       await _ttsService.stop();
       _log.error('audio_submit_failed', detail: '$e');
       _errorMessage = 'Chyba pri odosielaní: $e';
-      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+      _setCurrentState(
+        hasConversationHistory ? AppState.idleWithHistory : AppState.idle,
+      );
     }
   }
 
@@ -342,14 +357,18 @@ class AssistantProvider extends ChangeNotifier {
         return;
       }
 
-      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+      _setCurrentState(
+        hasConversationHistory ? AppState.idleWithHistory : AppState.idle,
+      );
       await _speakAndWaitIfEnabled('Obrázok nahratý');
     } catch (e) {
       _stopThinkingTimer();
       await _ttsService.stop();
       _log.error('photo_submit_failed', detail: '$e');
       _errorMessage = 'Chyba pri spracovaní fotografie: $e';
-      _setCurrentState(hasConversationHistory ? AppState.idleWithHistory : AppState.idle);
+      _setCurrentState(
+        hasConversationHistory ? AppState.idleWithHistory : AppState.idle,
+      );
     }
   }
 

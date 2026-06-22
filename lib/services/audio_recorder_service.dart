@@ -25,13 +25,21 @@ class AudioRecorderService {
   // clip to actually contain speech. Below that we treat it as noise / silence.
   static const int _minLoudSamples = 3;
   int _loudSamples = 0;
+  int _amplitudeSamples = 0;
   double _maxAmplitudeDb = -160.0;
+  bool _amplitudeMonitoringFailed = false;
 
   /// True when the last recording captured enough loud audio to plausibly be
   /// speech. Always true if amplitude monitoring isn't available on the
   /// platform (we'd rather upload than discard a real recording).
-  bool get speechDetected =>
-      _loudSamples >= _minLoudSamples || _maxAmplitudeDb > _speechThresholdDb + 6;
+  bool get speechDetected {
+    if (_amplitudeMonitoringFailed || _amplitudeSamples == 0) {
+      return true;
+    }
+
+    return _loudSamples >= _minLoudSamples ||
+        _maxAmplitudeDb > _speechThresholdDb + 6;
+  }
 
   /// Pre-initialize expensive resources (permission state, temp dir) so the
   /// first call to [startRecording] doesn't pay that cost.
@@ -91,18 +99,25 @@ class AudioRecorderService {
       );
 
       _resetSpeechDetection();
-      _amplitudeSubscription =
-          _recorder.onAmplitudeChanged(_amplitudeInterval).listen((amp) {
-        final db = amp.current;
-        if (db.isFinite) {
-          if (db > _maxAmplitudeDb) {
-            _maxAmplitudeDb = db;
-          }
-          if (db > _speechThresholdDb) {
-            _loudSamples++;
-          }
-        }
-      }, onError: (_) {});
+      _amplitudeSubscription = _recorder
+          .onAmplitudeChanged(_amplitudeInterval)
+          .listen(
+            (amp) {
+              final db = amp.current;
+              _amplitudeSamples++;
+              if (db.isFinite) {
+                if (db > _maxAmplitudeDb) {
+                  _maxAmplitudeDb = db;
+                }
+                if (db > _speechThresholdDb) {
+                  _loudSamples++;
+                }
+              }
+            },
+            onError: (_, __) {
+              _amplitudeMonitoringFailed = true;
+            },
+          );
     } catch (e) {
       throw Exception('Failed to start recording: $e');
     }
@@ -112,7 +127,9 @@ class AudioRecorderService {
     _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
     _loudSamples = 0;
+    _amplitudeSamples = 0;
     _maxAmplitudeDb = -160.0;
+    _amplitudeMonitoringFailed = false;
   }
 
   /// Stop recording and return the file path

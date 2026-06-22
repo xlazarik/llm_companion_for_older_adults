@@ -12,6 +12,8 @@ class TtsService {
   bool _isInitialized = false;
   String? _beepPath;
 
+  Future<void> prewarm() => _ensureInitialized();
+
   Future<void> _ensureInitialized() async {
     if (_isInitialized) return;
     await _tts.setLanguage('sk-SK');
@@ -66,8 +68,8 @@ class TtsService {
     header.setUint8(2, 0x46); // F
     header.setUint8(3, 0x46); // F
     header.setUint32(4, 36 + dataSize, Endian.little);
-    header.setUint8(8, 0x57);  // W
-    header.setUint8(9, 0x41);  // A
+    header.setUint8(8, 0x57); // W
+    header.setUint8(9, 0x41); // A
     header.setUint8(10, 0x56); // V
     header.setUint8(11, 0x45); // E
     // fmt chunk
@@ -108,28 +110,28 @@ class TtsService {
       await _beepPlayer.play(DeviceFileSource(_beepPath!));
       await completer.future.timeout(
         const Duration(seconds: 2),
-        onTimeout: () { sub.cancel(); },
+        onTimeout: () {
+          sub.cancel();
+        },
       );
     }
   }
 
   Future<void> speak(String text) async {
     await _ensureInitialized();
+    await _tts.awaitSpeakCompletion(false);
     await _tts.speak(text);
   }
 
   /// Speak text and wait until TTS finishes
   Future<void> speakAndWait(String text) async {
     await _ensureInitialized();
-    final completer = Completer<void>();
-    _tts.setCompletionHandler(() {
-      if (!completer.isCompleted) completer.complete();
-    });
-    await _tts.speak(text);
-    await completer.future.timeout(
-      const Duration(seconds: 5),
-      onTimeout: () {},
-    );
+    await _tts.awaitSpeakCompletion(true);
+    try {
+      await _tts.speak(text);
+    } finally {
+      await _tts.awaitSpeakCompletion(false);
+    }
   }
 
   Future<void> stop() async {
